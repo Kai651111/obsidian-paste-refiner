@@ -1,7 +1,7 @@
 {
   "id": "paste-refiner",
   "name": "Paste Refiner",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "0.15.0",
   "description": "Refine AI-pasted Markdown with math repair, safe blank-line cleanup, and horizontal-rule normalization.",
   "author": "Paste Refiner contributors",

@@ -1,38 +1,27 @@
 # Obsidian Paste Refiner
 
-An Obsidian plugin for cleaning up Markdown pasted from ChatGPT and other AI tools.
+Cleans Markdown copied from ChatGPT and other AI tools.
 
 ## Features
 
-- Fixes common ChatGPT/AI math export forms, including `\\( ... \\)`, `\\[ ... \\]`, math-like bracket blocks, and simple blocks such as `[ S ]` / `[ 3S ]`.
-- Converts standalone Markdown horizontal rules from `---` to `***` while protecting YAML frontmatter, fenced code blocks, display math, and Setext headings.
-- Reduces redundant blank lines.
-- Keeps a required blank line after blockquotes/callouts so following prose is not swallowed by Markdown lazy continuation.
-- Keeps table boundaries safe.
-- Does **not** force blank lines before or after display-math blocks.
-- Does **not** force blank lines before or after `***` horizontal rules.
-- Leaves fenced code blocks untouched by math conversion.
+- Converts explicit LaTeX parentheses/bracket delimiters to Obsidian dollar math, including double-escaped clipboard exports.
+- Repairs clipboard-escaped underscores, stars, braces, norm delimiters and triple-backslash row separators inside double-escaped formulas.
+- Protects existing dollar math, inline code, fenced code and document YAML frontmatter during default math conversion.
+- Converts standalone --- rules to ***, protecting frontmatter, fenced code, display math and Setext headings.
+- Preserves the last blank line separating paragraphs. Strict collapses repeated blank lines to one; Gradual removes one surplus blank line per invocation.
+- Preserves existing blank lines around display math and rules by default. Optional compact spacing removes these gaps with quote/callout and table spacing safeguards.
+- Optional ambiguous-math recognition enables legacy guesses for ordinary parentheses and square brackets; disabled by default.
 
-## Blank-line modes
+## Usage
 
-- **Gradual**: removes one blank line from each run per invocation.
-- **Strict**: collapses ordinary repeated blank lines to one, while still removing blank lines directly around display-math fences and `***` horizontal rules when Markdown structure does not require them.
+Run **Refine pasted content** from the command palette or assign a hotkey. A nonempty selection is processed in place; otherwise the entire note is processed. The plugin does not intercept paste events.
 
-## Install manually
+Strict blank-line cleanup is the default for new installations. Existing saved mode preferences remain in effect. Reload Obsidian or disable/re-enable **Paste Refiner** after updating plugin files.
 
-Copy this folder to:
+## Validation
 
-`.obsidian/plugins/paste-refiner/`
-
-Then reload Obsidian or disable/re-enable **Paste Refiner**.
-
-The command is **Refine pasted content**.
+Run `node tests/regression.cjs`. Tests cover the original SQP clipboard export, repeat-run stability, formula boundaries, interval brackets, code/frontmatter protection, paragraph spacing and CRLF preservation. The fixture is an unmodified source sample.
 
 ## Credits
 
-This project merges and adapts code from two MIT-licensed Obsidian plugins:
-
-- Riverise/obsidian-paste-polish
-- loglux/fix-math-for-obsidian
-
-See `THIRD_PARTY_NOTICES.md` for the original copyright and license notices.
+Adapted from MIT-licensed Riverise/obsidian-paste-polish and loglux/fix-math-for-obsidian. See THIRD_PARTY_NOTICES.md for original copyright and license notices.

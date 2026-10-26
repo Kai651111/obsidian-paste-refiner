@@ -3,9 +3,11 @@
 const obsidian = require('obsidian');
 
 const DEFAULT_SETTINGS = {
-    reduceMode: 'step', // 'step' reduces one blank line per run; 'one' collapses runs to one blank line
+    reduceMode: 'one',
     fixMath: true,
     normalizeHorizontalRules: true,
+    aggressiveMath: false,
+    compactBoundaries: false,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -96,9 +98,34 @@ function transformMathText(md) {
     const stats = { inlineCount: 0, blockCount: 0 };
     const result = segments.map((seg) => {
         if (seg.type === 'code') return seg.text;
-        return convertMath(seg.text, stats);
+        return convertExplicitMath(seg.text, stats);
     }).join('');
     return { text: result, stats };
+}
+
+// Recognize explicit delimiters before considering ambiguous brackets. Clipboard
+// HTML-to-Markdown conversion can escape the delimiter backslash a second time.
+function convertExplicitMath(text, stats) {
+    const lineBreak = detectLineBreak(text);
+    const clean = (inner, clipboardEscaped) => {
+        if (!clipboardEscaped) return inner.trim();
+        return inner.trim()
+            .replace(/\\([_*])/g, '$1')
+            .replace(/\\{3}(?!\\)/g, '\\\\')
+            .replace(/\\{2}([{}|])/g, '\\$1');
+    };
+    // Protect inline code and already valid math as complete tokens. In
+    // particular, parentheses inside $...$ must never be converted again.
+    const tokens = /(`+)[^\n]*?\1|(?<!\\)\$\$[\s\S]*?(?<!\\)\$\$|(?<![\\$])\$(?!\$)(?:\\.|[^$\r\n])*?(?<!\\)\$(?!\$)|(?<!\\)(\\{1,2})\[([\s\S]*?)\2\]|(?<!\\)(\\{1,2})\(([^\r\n]*?)\4\)/g;
+    return text.replace(tokens, (match, code, displaySlash, displayInner, inlineSlash, inlineInner) => {
+        if (code || match.startsWith('$')) return match;
+        if (displaySlash) {
+            stats.blockCount++;
+            return `$$${lineBreak}${clean(displayInner, displaySlash.length === 2)}${lineBreak}$$`;
+        }
+        stats.inlineCount++;
+        return `$${clean(inlineInner, inlineSlash.length === 2)}$`;
+    });
 }
 
 // Split while preserving the original line endings and without touching fenced code blocks.
@@ -527,7 +554,7 @@ function normalizeHorizontalRules(text, protectFrontmatter = true) {
 /*                      Markdown-safe blank line cleanup                     */
 /* -------------------------------------------------------------------------- */
 
-function reduceBlankLinesSafely(text, mode, protectFrontmatter = true) {
+function reduceBlankLinesSafely(text, mode, protectFrontmatter = true, compactBoundaries = false) {
     const lineBreak = detectLineBreak(text);
     const lines = text.split(/\r?\n/);
     const out = [];
@@ -614,11 +641,11 @@ function reduceBlankLinesSafely(text, mode, protectFrontmatter = true) {
         const previousLine = out.length > 0 ? out[out.length - 1] : '';
         const nextLine = i < lines.length ? lines[i] : '';
 
-        let target = mode === 'step' ? Math.max(0, runLength - 1) : Math.min(1, runLength);
+        let target = mode === 'step' ? Math.max(1, runLength - 1) : Math.min(1, runLength);
 
         // Display-math fences and *** horizontal rules do not need surrounding blank lines.
         // Remove those gaps even in Strict mode.
-        if ((prefersNoBlankBoundary(previousLine) || prefersNoBlankBoundary(nextLine)) && runLength > 0) {
+        if (compactBoundaries && (prefersNoBlankBoundary(previousLine) || prefersNoBlankBoundary(nextLine)) && runLength > 0) {
             target = 0;
         }
 
@@ -665,23 +692,32 @@ class PasteRefinerPlugin extends obsidian.Plugin {
     }
 
     processText(text, protectFrontmatter = true) {
-        let result = text;
+        const frontmatter = protectFrontmatter ? text.match(/^---[^\S\r\n]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[^\S\r\n]*(?:\r?\n|$)/) : null;
+        const prefix = frontmatter ? frontmatter[0] : '';
+        let result = text.slice(prefix.length);
         const stats = { inlineCount: 0, blockCount: 0 };
 
         if (this.settings.fixMath) {
-            result = normalizeSimpleBracketMath(result);
             const mathResult = transformMathText(result);
             result = mathResult.text;
             stats.inlineCount = mathResult.stats.inlineCount;
             stats.blockCount = mathResult.stats.blockCount;
+            if (this.settings.aggressiveMath) {
+                result = splitByCodeFences(result).map((segment) => {
+                    if (segment.type === 'code') return segment.text;
+                    return segment.text.split(/(\$\$[\s\S]*?\$\$|(?<!\\)\$[^$\r\n]+\$)/).map((part, index) =>
+                        index % 2 ? part : convertMath(part, stats)
+                    ).join('');
+                }).join('');
+            }
         }
 
         if (this.settings.normalizeHorizontalRules) {
             result = normalizeHorizontalRules(result, protectFrontmatter);
         }
 
-        result = reduceBlankLinesSafely(result, this.settings.reduceMode, protectFrontmatter);
-        return { text: result, stats };
+        result = reduceBlankLinesSafely(result, this.settings.reduceMode, protectFrontmatter, this.settings.compactBoundaries);
+        return { text: prefix + result, stats };
     }
 
     polish(editor) {
@@ -715,7 +751,7 @@ class PasteRefinerSettingTab extends obsidian.PluginSettingTab {
 
         new obsidian.Setting(containerEl)
             .setName('Fix Math conversion')
-            .setDesc('Integrates Fix Math-style conversion for ChatGPT/AI LaTeX exports, including \\( ... \\), \\[ ... \\], math-like brackets, and simple blocks such as [ S ] or [ 3S ]. Fenced code blocks are left untouched.')
+            .setDesc('Converts explicit LaTeX math delimiters, including double-escaped clipboard exports. Preserves existing dollar math, code and document frontmatter.')
             .addToggle((toggle) => {
                 toggle
                     .setValue(this.plugin.settings.fixMath)
@@ -739,7 +775,7 @@ class PasteRefinerSettingTab extends obsidian.PluginSettingTab {
 
         new obsidian.Setting(containerEl)
             .setName('Blank line reduction mode')
-            .setDesc('Gradual removes one blank line from each run per invocation. Strict collapses repeated blank lines to one. Structural spacing is preserved only where needed for Markdown safety (notably after blockquotes/callouts and before tables). Blank lines around display math and *** horizontal rules are removed.')
+            .setDesc('Gradual removes one surplus blank line per run. Strict collapses repeated blank lines to one. Both preserve the last blank line separating paragraphs and blocks.')
             .addDropdown((dropDown) => {
                 dropDown
                     .addOption('step', 'Gradual: reduce by one')
@@ -750,6 +786,22 @@ class PasteRefinerSettingTab extends obsidian.PluginSettingTab {
                         await this.plugin.saveSettings();
                     });
             });
+
+        new obsidian.Setting(containerEl)
+            .setName('Recognize ambiguous math')
+            .setDesc('Also guesses formulas in ordinary parentheses and square brackets. May interpret prose as math; disabled by default.')
+            .addToggle((toggle) => toggle.setValue(this.plugin.settings.aggressiveMath).onChange(async (value) => {
+                this.plugin.settings.aggressiveMath = value;
+                await this.plugin.saveSettings();
+            }));
+
+        new obsidian.Setting(containerEl)
+            .setName('Compact math and horizontal-rule spacing')
+            .setDesc('Removes existing blank lines next to display-math fences and *** rules. Disabled by default to retain block spacing.')
+            .addToggle((toggle) => toggle.setValue(this.plugin.settings.compactBoundaries).onChange(async (value) => {
+                this.plugin.settings.compactBoundaries = value;
+                await this.plugin.saveSettings();
+            }));
     }
 }
 
